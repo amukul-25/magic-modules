@@ -15,20 +15,17 @@ package provider
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"go/format"
-	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
-	"sync"
 	"text/template"
 
 	"github.com/GoogleCloudPlatform/magic-modules/mmv1/api"
+	"github.com/GoogleCloudPlatform/magic-modules/mmv1/api/metadata"
 	"github.com/GoogleCloudPlatform/magic-modules/mmv1/google"
 	"github.com/golang/glog"
+	"gopkg.in/yaml.v3"
 )
 
 type TemplateData struct {
@@ -45,8 +42,6 @@ var GA_VERSION = "ga"
 var BETA_VERSION = "beta"
 var ALPHA_VERSION = "alpha"
 var PRIVATE_VERSION = "private"
-
-var goimportFiles sync.Map
 
 func NewTemplateData(outputFolder string, versionName string) *TemplateData {
 	td := TemplateData{OutputFolder: outputFolder, VersionName: versionName}
@@ -80,11 +75,15 @@ func (td *TemplateData) GenerateFWResourceFile(filePath string, resource api.Res
 }
 
 func (td *TemplateData) GenerateMetadataFile(filePath string, resource api.Resource) {
-	templatePath := "templates/terraform/metadata.yaml.tmpl"
-	templates := []string{
-		templatePath,
+	metadata := metadata.FromResource(resource)
+	bytes, err := yaml.Marshal(metadata)
+	if err != nil {
+		glog.Exit("error marshalling yaml %v: %v", filePath)
 	}
-	td.GenerateFile(filePath, templatePath, resource, false, templates...)
+	err = os.WriteFile(filePath, bytes, 0644)
+	if err != nil {
+		glog.Exit(err)
+	}
 }
 
 func (td *TemplateData) GenerateDataSourceFile(filePath string, resource api.Resource) {
@@ -121,7 +120,7 @@ func (td *TemplateData) GenerateDocumentationFile(filePath string, resource api.
 	td.GenerateFile(filePath, templatePath, resource, false, templates...)
 }
 
-func (td *TemplateData) GenerateTestFile(filePath string, resource api.Resource) {
+func (td *TemplateData) GenerateTestFileLegacy(filePath string, resource api.Resource) {
 	templatePath := "templates/terraform/examples/base_configs/test_file.go.tmpl"
 	templates := []string{
 		"templates/terraform/env_var_context.go.tmpl",
@@ -150,8 +149,66 @@ func (td *TemplateData) GenerateTestFile(filePath string, resource api.Resource)
 	td.GenerateFile(filePath, templatePath, tmplInput, true, templates...)
 }
 
-func (td *TemplateData) GenerateDataSourceTestFile(filePath string, resource api.Resource) {
+func (td *TemplateData) GenerateTestFile(filePath string, resource api.Resource) {
+	templatePath := "templates/terraform/samples/base_configs/test_file.go.tmpl"
+	templates := []string{
+		"templates/terraform/env_var_context.go.tmpl",
+		templatePath,
+	}
+	tmplInput := TestInput{
+		Res:                  resource,
+		ImportPath:           resource.ImportPath,
+		PROJECT_NAME:         "my-project-name",
+		CREDENTIALS:          "my/credentials/filename.json",
+		REGION:               "us-west1",
+		ORG_ID:               "123456789",
+		ORG_DOMAIN:           "example.com",
+		ORG_TARGET:           "123456789",
+		PROJECT_NUMBER:       "1111111111111",
+		BILLING_ACCT:         "000000-0000000-0000000-000000",
+		MASTER_BILLING_ACCT:  "000000-0000000-0000000-000000",
+		SERVICE_ACCT:         "my@service-account.com",
+		CUST_ID:              "A01b123xz",
+		IDENTITY_USER:        "cloud_identity_user",
+		PAP_DESCRIPTION:      "description",
+		CHRONICLE_ID:         "00000000-0000-0000-0000-000000000000",
+		VMWAREENGINE_PROJECT: "my-vmwareengine-project",
+	}
+
+	td.GenerateFile(filePath, templatePath, tmplInput, true, templates...)
+}
+
+func (td *TemplateData) GenerateDataSourceTestFileLegacy(filePath string, resource api.Resource) {
 	templatePath := "templates/terraform/examples/base_configs/datasource_test_file.go.tmpl"
+	templates := []string{
+		"templates/terraform/env_var_context.go.tmpl",
+		templatePath,
+	}
+	tmplInput := TestInput{
+		Res:                  resource,
+		ImportPath:           resource.ImportPath,
+		PROJECT_NAME:         "my-project-name",
+		CREDENTIALS:          "my/credentials/filename.json",
+		REGION:               "us-west1",
+		ORG_ID:               "123456789",
+		ORG_DOMAIN:           "example.com",
+		ORG_TARGET:           "123456789",
+		PROJECT_NUMBER:       "1111111111111",
+		BILLING_ACCT:         "000000-0000000-0000000-000000",
+		MASTER_BILLING_ACCT:  "000000-0000000-0000000-000000",
+		SERVICE_ACCT:         "my@service-account.com",
+		CUST_ID:              "A01b123xz",
+		IDENTITY_USER:        "cloud_identity_user",
+		PAP_DESCRIPTION:      "description",
+		CHRONICLE_ID:         "00000000-0000-0000-0000-000000000000",
+		VMWAREENGINE_PROJECT: "my-vmwareengine-project",
+	}
+
+	td.GenerateFile(filePath, templatePath, tmplInput, true, templates...)
+}
+
+func (td *TemplateData) GenerateDataSourceTestFile(filePath string, resource api.Resource) {
+	templatePath := "templates/terraform/samples/base_configs/datasource_test_file.go.tmpl"
 	templates := []string{
 		"templates/terraform/env_var_context.go.tmpl",
 		templatePath,
@@ -203,8 +260,18 @@ func (td *TemplateData) GenerateIamDatasourceDocumentationFile(filePath string, 
 	td.GenerateFile(filePath, templatePath, resource, false, templates...)
 }
 
-func (td *TemplateData) GenerateIamPolicyTestFile(filePath string, resource api.Resource) {
+func (td *TemplateData) GenerateIamPolicyTestFileLegacy(filePath string, resource api.Resource) {
 	templatePath := "templates/terraform/examples/base_configs/iam_test_file.go.tmpl"
+	templates := []string{
+		templatePath,
+		"templates/terraform/env_var_context.go.tmpl",
+		"templates/terraform/iam/iam_test_setup_legacy.go.tmpl",
+	}
+	td.GenerateFile(filePath, templatePath, resource, true, templates...)
+}
+
+func (td *TemplateData) GenerateIamPolicyTestFile(filePath string, resource api.Resource) {
+	templatePath := "templates/terraform/samples/base_configs/iam_test_file.go.tmpl"
 	templates := []string{
 		templatePath,
 		"templates/terraform/env_var_context.go.tmpl",
@@ -284,52 +351,11 @@ func (td *TemplateData) GenerateFile(filePath, templatePath string, input any, g
 		} else {
 			sourceByte = formattedByte
 		}
-		if !strings.Contains(templatePath, "third_party/terraform") {
-			goimportFiles.Store(filePath, struct{}{})
-		}
 	}
 
 	err = os.WriteFile(filePath, sourceByte, 0644)
 	if err != nil {
 		glog.Exit(err)
-	}
-}
-
-func FixImports(outputPath string, dumpDiffs bool) {
-	log.Printf("Fixing go import paths")
-
-	baseArgs := []string{"-w"}
-	if dumpDiffs {
-		baseArgs = []string{"-d", "-w"}
-	}
-
-	// -w and -d are mutually exclusive; if dumpDiffs is requested we need to run twice.
-	for _, base := range baseArgs {
-		hasFiles := false
-		args := []string{base}
-		goimportFiles.Range(func(filePath, _ any) bool {
-			p, err := filepath.Rel(outputPath, filePath.(string))
-			if err != nil {
-				log.Fatal(err)
-			}
-			args = append(args, p)
-			hasFiles = true
-			return true
-		})
-
-		if hasFiles {
-			cmd := exec.Command("goimports", args...)
-			cmd.Dir = outputPath
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				var exitErr *exec.ExitError
-				if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-					glog.Error(string(exitErr.Stderr))
-				}
-				log.Fatal(err)
-			}
-		}
 	}
 }
 
